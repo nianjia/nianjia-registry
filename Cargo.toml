@@ -17,7 +17,7 @@ name = "registry"
 clap = "2.33.0"
 hyper = "0.12.25"
 humantime = "1.2.0"
-nianjia = { path = "../nianjia" }
+nianjia = { git = "https://github.com/nianjia/nianjia" }
 log = "0.4.6"
 http = "0.1.17"
 serde = "1.0.90"

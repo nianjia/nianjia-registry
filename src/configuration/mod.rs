@@ -20,7 +20,7 @@ impl fmt::Debug for Duration {
 
 impl Default for Duration {
     fn default() -> Self {
-        Self(humantime::Duration::from_str("1s").unwrap())
+        Duration(humantime::Duration::from_str("1s").unwrap())
     }
 }
 
