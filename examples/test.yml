@@ -23,30 +23,15 @@ log:
           - errors@example.com
 loglevel: debug # deprecated: use "log"
 storage:
-  azure:
-    accountname: accountname
-    accountkey: base64encodedaccountkey
-    container: containername
-  gcs:
-    bucket: bucketname
-    keyfile: /path/to/keyfile
-    rootdirectory: /gcs/object/name/prefix
-    chunksize: 5242880
   s3:
-    accesskey: awsaccesskey
-    secretkey: awssecretkey
-    region: us-west-1
-    regionendpoint: http://myobjects.local
-    bucket: bucketname
+    region: us-east-1
+    bucket: my-bucket
+    rootdirectory: /registry
     encrypt: true
-    keyid: mykeyid
-    secure: true
-    v4auth: true
-    chunksize: 5242880
-    multipartcopychunksize: 33554432
-    multipartcopymaxconcurrency: 100
-    multipartcopythresholdsize: 33554432
-    rootdirectory: /s3/object/name/prefix
+    secure: false
+    accesskey: SAMPLEACCESSKEY
+    secretkey: SUPERSECRET
+    host: ~
   swift:
     username: username
     password: password

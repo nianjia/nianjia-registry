@@ -1,17 +1,36 @@
 #![allow(dead_code)]
-
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
+use std::fs;
 use std::str::FromStr;
 
-use serde::{de, Deserialize};
+use serde::{de, ser, Deserialize, Serialize};
 
+use nianjia::util::errors::NianjiaResult;
+
+#[derive(PartialEq)]
 struct Duration(humantime::Duration);
 struct DurationVisitor;
+
+impl fmt::Debug for Duration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Duration {:?}", self.0)
+    }
+}
 
 impl Default for Duration {
     fn default() -> Self {
         Self(humantime::Duration::from_str("1s").unwrap())
+    }
+}
+
+impl Serialize for Duration {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: ser::Serializer,
+    {
+        let string = format!("{}s {}ns", self.0.as_secs(), self.0.subsec_nanos());
+        serializer.serialize_str(&string)
     }
 }
 
@@ -44,26 +63,54 @@ impl<'de> de::Visitor<'de> for DurationVisitor {
 
 type LogLevel = String;
 
-#[derive(Deserialize)]
+// Configuration is a versioned registry configuration, intended to be provided by a yaml file, and
+// optionally modified by environment variables.
+//
+// Note that yaml field names should never include _ characters, since this is the separator used
+// in environment variable names.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Configuration {
+    // `version` is the version which defines the format of the rest of the configuration
     version: String,
+
+    // `log` supports setting various parameters related to the logging
+    // subsystem.
     log: Log,
-    #[serde(rename = "loglevel")]
-    log_level: LogLevel,
+
+    // `storage` is the configuration for the registry's storage driver
+    #[serde(default)]
     storage: Storage,
+    // `auth` allows configuration of various authorization methods that may be
+    // used to gate requests.
+    #[serde(default)]
     auth: Auth,
-    middleware: HashMap<String, Vec<Middleware>>,
+
+    // `middleware` lists all middlewares to be used by the registry.
+    #[serde(default)]
+    middleware: BTreeMap<String, Vec<Middleware>>,
+
+    #[serde(default)]
     reporting: Reporting,
+    #[serde(default)]
     http: Http,
+
+    #[serde(default)]
     notifications: Notifications,
+
+    #[serde(default)]
     redis: Redis,
+
+    #[serde(default)]
     health: Health,
+    #[serde(default)]
     proxy: Proxy,
 
     // `compatibility` is used for configurations of working with older or deprecated features.
+    #[serde(default)]
     compatibility: Compatibility,
 
     // `validation` configures validation options for the registry.
+    #[serde(default)]
     validation: Validation,
 
     // `policy` configures registry policy options.
@@ -71,7 +118,7 @@ pub struct Configuration {
     policy: Policy,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Log {
     #[serde(default)]
     access_log: AccessLog,
@@ -80,17 +127,18 @@ struct Log {
     #[serde(default)]
     formatter: String,
     #[serde(default)]
-    fields: HashMap<String, String>,
+    fields: BTreeMap<String, String>,
+    #[serde(default)]
     hooks: Vec<LogHook>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct AccessLog {
     #[serde(default)]
     disabled: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct LogHook {
     #[serde(default)]
     disabled: bool,
@@ -104,25 +152,26 @@ struct LogHook {
 }
 
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 #[serde(default)]
 struct Parameters {
     #[serde(flatten)]
-    parameters: HashMap<String, Parameter>,
+    parameters: BTreeMap<String, Parameter>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 #[serde(untagged)]
 enum Parameter {
     Integer(i64),
     Double(f64),
     String(String),
     Boolean(bool),
+    Null,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Storage {
-    #[serde(flatten)]
+    #[serde(flatten, default)]
     media: StorageMedia,
     maintenance: Option<Maintenance>,
     cache: Option<Cache>,
@@ -130,31 +179,40 @@ struct Storage {
     redirect: Option<Redirect>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 enum StorageMedia {
     #[serde(rename = "filesystem")]
-    Filesystem(Parameters),
+    Filesystem(BTreeMap<String, Parameter>),
+    #[serde(rename = "s3")]
+    S3(BTreeMap<String, Parameter>),
+    #[serde(rename = "inmemory")]
     InMemory,
 }
 
-#[derive(Deserialize)]
+impl Default for StorageMedia {
+    fn default() -> Self {
+        StorageMedia::Filesystem(BTreeMap::new())
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Maintenance {
     uploadpurging: Parameters,
     readonly: Parameters,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Cache(Parameters);
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Delete(Parameters);
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Redirect(Parameters);
 
-type Auth = HashMap<String, Parameters>;
+type Auth = BTreeMap<String, Parameters>;
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Middleware {
     name: String,
     #[serde(default)]
@@ -162,33 +220,40 @@ struct Middleware {
     options: Parameters,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Reporting {
     bugsnag: BugsnagReporting,
-    #[serde(rename = "newrelic")]
+    #[serde(rename = "newrelic", default)]
     new_relic: NewRelicReporting,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Http {
+    #[serde(default)]
     addr: String,
     #[serde(default)]
     net: String,
+    #[serde(default)]
     host: String,
+    #[serde(default)]
     prefix: String,
+    #[serde(default)]
     secret: String,
-    #[serde(rename = "relativeurls")]
+    #[serde(rename = "relativeurls", default)]
     relative_urls: bool,
     #[serde(rename = "draintimeout", default)]
     drain_timeout: Duration,
+    #[serde(default)]
     tls: Tls,
     headers: Header,
+    #[serde(default)]
     debug: Debug,
+    #[serde(default)]
     http2: Http2,
 }
 
 #[allow(non_snake_case)]
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Tls {
     certificate: String,
     key: String,
@@ -200,7 +265,7 @@ struct Tls {
     lets_encrypt: LetsEncrypt,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct LetsEncrypt {
     #[serde(rename = "cachefile")]
     cache_file: String,
@@ -209,9 +274,9 @@ struct LetsEncrypt {
     hosts: Vec<String>,
 }
 
-type Header = HashMap<String, Vec<String>>;
+type Header = BTreeMap<String, Vec<String>>;
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Debug {
     #[serde(default)]
     addr: String,
@@ -219,7 +284,7 @@ struct Debug {
     prometheus: Prometheus,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Prometheus {
     #[serde(default)]
     enabled: bool,
@@ -227,12 +292,12 @@ struct Prometheus {
     path: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Http2 {
     disabled: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Notifications {
     #[serde(rename = "events", default)]
     event_config: Events,
@@ -240,7 +305,7 @@ struct Notifications {
 }
 
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Redis {
     // `addr` specifies the the redis instance available to the application.
     addr: String,
@@ -261,7 +326,7 @@ struct Redis {
 
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Pool {
     // `max_idle` sets the maximum number of idle connections.
     #[serde(rename = "maxidle")]
@@ -276,7 +341,7 @@ struct Pool {
     idle_timeout: Duration,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Health {
     #[serde(rename = "file", default)]
     file_checkers: Vec<FileChecker>,
@@ -289,7 +354,7 @@ struct Health {
 }
 
 // Proxy configures the registry as a pull through cache
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Proxy {
     #[serde(rename = "remoteurl")]
     remote_url: String,
@@ -298,12 +363,12 @@ struct Proxy {
     password: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Compatibility {
     schema1: Schema1, // `schema1` configures how schema1 manifests will be handled
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Schema1 {
     // `trust_key` is the signing key to use for adding the signature to
     // schema1 manifests.
@@ -314,26 +379,25 @@ struct Schema1 {
     enabled: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Validation {
     // Enabled enables the other options in this section. This field is
     // deprecated in favor of Disabled.
     enabled: bool,
-        #[serde(rename = "signingkeyfile", default)]
-
+    #[serde(rename = "signingkeyfile", default)]
     // Disabled disables the other options in this section.
     disabled: bool,
     // Manifests configures manifest validation.
     manifests: Manifest,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Manifest {
     // `urls` configures validation for URLs in pushed manifests.
     urls: Urls,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Urls {
     // allow` specifies regular expressions (https://godoc.org/regexp/syntax)
     // that URLs in pushed manifests must match.
@@ -343,17 +407,17 @@ struct Urls {
     deny: Vec<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Policy {
     repository: Repository,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Repository {
     classes: Vec<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct MailOptions {
     #[serde(default)]
     smtp: Smtp,
@@ -363,7 +427,7 @@ struct MailOptions {
     to: Vec<String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Smtp {
     #[serde(default)]
     addr: String,
@@ -375,7 +439,7 @@ struct Smtp {
     insecure: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct FileChecker {
     #[serde(default)]
     interval: Duration,
@@ -385,7 +449,7 @@ struct FileChecker {
     threshold: u32,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct HttpChecker {
     #[serde(default)]
     timeout: Duration,
@@ -400,7 +464,7 @@ struct HttpChecker {
     threshold: u32,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct TcpChecker {
     #[serde(default)]
     timeout: Duration,
@@ -412,7 +476,7 @@ struct TcpChecker {
     threshold: u32,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct StorageDriver {
     #[serde(default)]
     enabled: bool,
@@ -423,19 +487,23 @@ struct StorageDriver {
     threshold: u32,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Events {
     include_references: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct EndPoint {
     name: String,
+    #[serde(default)]
     disabled: bool,
     url: String,
     headers: Header,
+    #[serde(default)]
     timeout: Duration,
+    #[serde(default)]
     threshold: u32,
+    #[serde(default)]
     backoff: Duration,
     #[serde(rename = "ignoredmediatypes")]
     ignore_media_type: Vec<String>,
@@ -443,26 +511,96 @@ struct EndPoint {
     ignore: Ignore,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct Ignore {
+    #[serde(default, rename = "mediatypes")]
     media_types: Vec<String>,
     actions: Vec<String>,
 }
 
 #[allow(non_snake_case)]
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct BugsnagReporting {
     #[serde(rename = "apikey")]
     API_key: String,
-    #[serde(rename = "releasestage")]
+    #[serde(rename = "releasestage", default)]
     release_stage: String,
+    #[serde(default)]
     endpoint: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
 struct NewRelicReporting {
     #[serde(rename = "licensekey")]
     license_key: String,
     name: String,
     verbose: bool,
+}
+
+pub fn parse_str<T: AsRef<str>>(content: &T) -> NianjiaResult<Configuration> {
+    let config = serde_yaml::from_str(&content.as_ref())?;
+    Ok(config)
+}
+
+pub fn parse_file(file: &str) -> NianjiaResult<Configuration> {
+    parse_str(&fs::read_to_string(file)?)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::configuration::*;
+    // CONFIG_YAML_V0_1 is a Version 0.1 yaml document representing configStruct
+    const CONFIG_YAML_V0_1: &'static str = "
+version: 0.1
+log:
+  level: info
+  fields:
+    environment: test
+storage:
+  s3:
+    region: us-east-1
+    bucket: my-bucket
+    rootdirectory: /registry
+    encrypt: true
+    secure: false
+    accesskey: SAMPLEACCESSKEY
+    secretkey: SUPERSECRET
+    host: ~
+    port: 42
+auth:
+  silly:
+    realm: silly
+    service: silly
+notifications:
+  endpoints:
+    - name: endpoint-1
+      url:  http://example.com
+      headers:
+        Authorization: [Bearer <example>]
+      ignoredmediatypes:
+        - application/octet-stream
+      ignore:
+        mediatypes:
+           - application/octet-streamsto
+        actions:
+           - pull
+reporting:
+  bugsnag:
+    apikey: BugsnagApiKey
+http:
+  clientcas:
+    - /path/to/ca.pem
+  headers:
+    X-Content-Type-Options: [nosniff]
+";
+
+    #[test]
+    fn test_parse_roundtrip() {
+        let config = parse_str(&CONFIG_YAML_V0_1).unwrap();
+        let content = serde_yaml::to_string(&config).unwrap();
+        let config_repeat = parse_str(&content).unwrap();
+        assert_eq!(config, config_repeat);
+        assert_eq!(content, serde_yaml::to_string(&config_repeat).unwrap());
+    }
 }

@@ -1,11 +1,10 @@
 use std::env;
-use std::fs;
 
-use clap::{Arg, App};
-use nianjia::util::errors::NianjiaResult;
+use clap::{App, Arg};
+
 use nianjia::core::shell::Shell;
 
-use registry::configuration::Configuration;
+use registry::configuration::parse_file;
 
 fn main() {
 	let matches = App::new("nianjia-registry")
@@ -24,17 +23,15 @@ fn main() {
 
 	println!("{:?}", env::var_os("NIANJIA_HOME"));
 	let config_file = matches.value_of("config").unwrap_or("default.conf");
-	let _config =  match resolve_config(config_file) {
-		Ok(cfg) => cfg,
+	match parse_file(config_file) {
+		Ok(cfg) => {
+			println!("{:?}", cfg);
+		}
 		Err(e) => {
+			println!("{:?}", e);
 			let mut shell = Shell::new();
 			nianjia::exit_with_error(e.into(), &mut shell)
 		}
 	};
 }
 
-fn resolve_config(file: &str) -> NianjiaResult<Configuration> {
-	let content = fs::read_to_string(file)?;
-	let config = serde_yaml::from_str(&content)?;
-	Ok(config)
-}
